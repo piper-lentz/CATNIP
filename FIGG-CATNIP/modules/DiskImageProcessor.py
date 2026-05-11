@@ -1,4 +1,6 @@
 """
+DiskImageProcessor
+
 FIGG PROCESSING:
 normalizes, background subtracts, and scales disk images
 according to user-defined parameters.
@@ -28,14 +30,16 @@ from astropy.visualization.stretch import BaseStretch
 
 ######################
 
-def _prepare(values, clip=True, out=None):
+def _prepare_for_asinhlin(values, clip_asinhlin=True, out=None):
     """
     Prepare the data by optionally clipping and copying, and return the
     array that should be subsequently used for in-place calculations.
+
+    Prepares image for asinhlin scaling. Used later in __call__ function.
     """
 
-    if clip:
-        return np.clip(values, 0., 1., out=out)
+    if clip_asinhlin:
+        return np.clip(values, 0., 1., out=out) # anything <0 becomes 0, and anything >1 becomes 1
     else:
         if out is None:
             return np.array(values, copy=True)
@@ -67,17 +71,17 @@ class AsinhLinStretch(BaseStretch):
     def __init__(self, a=0.1, b=0.5, c=0.7):
         super().__init__()
         if a <= 0 or a > 1:
-            raise ValueError("a must be > 0 and <= 1")
+            raise ValueError("Scale paramter 1 must be > 0 and <= 1")
         self.a = a
         if b <= 0 or b > 1:
-            raise ValueError('b must be > 0 and <= 1')
+            raise ValueError('Scale parameter 2 must be > 0 and <= 1')
         self.b = b
         if c <= b or c > 1:
-            raise ValueError('c must be > b and <= 1')
+            raise ValueError('Scale parameter 3 must be > Scale parameter 2 and <= 1')
         self.c = c
 
-    def __call__(self, values, clip=True, out=None):
-        raw = _prepare(values, clip=clip, out=out)
+    def __call__(self, values, clip_asinhlin=True, out=None):
+        raw = _prepare_for_asinhlin(values, clip_asinhlin=clip_asinhlin, out=out)
         # Calculate transition back to linear
         n = np.arcsinh(self.b / self.a) / np.arcsinh(1. / self.a)
         # Define ranges
@@ -106,10 +110,10 @@ old_prc_ims = {}
 old_prc_scales = {}
 old_imdat = {}
 
-def edge_remove(im,imdat):
+def crop(im,imdat):
   """
   Sets pixel values along the edge of an image to nan.
-  The thickness of the edges is determined by an adjustable parameter 'Crop',
+  The thickness of the edges to be removed is determined by an adjustable parameter 'Crop',
   to be defined in imdat.
   
   Inputs:
@@ -121,13 +125,13 @@ def edge_remove(im,imdat):
   # Defines the radius of pixels to remove from the image edge
   # (reduced by a percentage so there is overlap)
   #edge_crop = int((imdat['Dimensions'] - imdat['Crop'])/2 * 0.95)
-  edge_crop = imdat['Crop'] #PL
+  crop = imdat['Crop'] #PL
     
   #Crop the image by setting all extra values to nans
-  im[-1*edge_crop:] = np.nan
-  im[:edge_crop] = np.nan
-  im[:,-1*edge_crop:] = np.nan
-  im[:,:edge_crop] = np.nan
+  im[-1*crop:] = np.nan
+  im[:crop] = np.nan
+  im[:,-1*crop:] = np.nan
+  im[:,:crop] = np.nan
 
   # New that PL added: trim NaN edges
   valid_rows = ~np.all(np.isnan(im), axis=1)
@@ -135,56 +139,6 @@ def edge_remove(im,imdat):
   im_trimmed = im[valid_rows][:, valid_cols]
 
   return im_trimmed
-  #return im
-
-  #   # I addded this (Piper)
-  # if len(im.shape) == 4:
-  #     im[:, :, -edge_crop:, :] = np.nan  # Bottom edge
-  #     im[:, :, :edge_crop, :] = np.nan    # Top edge
-  #     im[:, :, :, -edge_crop:] = np.nan   # Right edge
-  #     im[:, :, :, :edge_crop] = np.nan    # Left edge
-    
-  #     im_2d = im[0, 0]
-    
-  #     # Trim the NaNs
-  #     valid_rows = ~np.all(np.isnan(im_2d), axis=1)
-  #     valid_cols = ~np.all(np.isnan(im_2d), axis=0)
-  #     im_trimmed = im_2d[valid_rows][:, valid_cols]
-    
-  #     # Return the cropped image
-  #     return im_trimmed
-
-  # if len(im.shape) == 3:
-  #     im[:, -edge_crop:, :] = np.nan  # Bottom edge
-  #     im[:, :edge_crop, :] = np.nan    # Top edge
-  #     im[:, :, -edge_crop:] = np.nan   # Right edge
-  #     im[:, :, :edge_crop] = np.nan    # Left edge
-    
-  #     im_2d = im[:, :, :]
-    
-  #     # Trim the NaNs
-  #     valid_rows = ~np.all(np.isnan(im_2d), axis=1)
-  #     valid_cols = ~np.all(np.isnan(im_2d), axis=0)
-  #     im_trimmed = im_2d[valid_rows][:, valid_cols]
-    
-  #     # Return the cropped image
-  #     return im_trimmed
-
-# def edge_remove(im, imdat):
-#     """
-#     Crops the edges of the image and returns only the central portion.
-
-#     Inputs:
-#         im (np array): input image
-#         imdat (dict): dictionary containing 'Crop' key (pixels to remove from each edge)
-#     Outputs:
-#         im_cropped (np array): central portion of the image
-#     """
-#     crop = imdat['Crop']  # pixels to remove from each edge
-
-#     # Slice the central portion
-#     im = im[crop:-crop, crop:-crop]
-#     return im
 
 
 
@@ -193,7 +147,7 @@ def edge_remove(im,imdat):
 def mask_remove(im,imdat):
   """
   Sets pixel values within a given radius from the image center to nan.
-  The radius is determined by an adjustable parameter 'Radius', to be
+  The radius is determined by an adjustable parameter 'Mask', to be
   defined in imdat.
   
   Inputs:
@@ -204,7 +158,7 @@ def mask_remove(im,imdat):
   """
   # Defines the radius of pixels to remove from the image center
   # (reduced by a percentage so there is overlap)
-  r = imdat['Radius'] * 0.85
+  r = imdat['Mask'] * 0.85
 
   # Loop through each pixel in the image
   for i in range(-1*int(len(im)/2),int(len(im)/2)):
@@ -236,15 +190,23 @@ def norm(imdat, custom_im=None):
     im = fits.getdata(imdat['Path'])
 
   # Choose a corresponding cube slice
+  # squeeze out singleton dimesnions first to make ALMA images work (PL added)
+  im = np.squeeze(im)
+
   if 'Cube Slice' in imdat:
     if len(im.shape)!=2 and imdat['Cube Slice'] is not None: im = im[imdat['Cube Slice']]
+          
+  # safety check: ensure 2D images     
+  if im.ndim !=2:
+      raise ValueError(f"Image at {imdat['Path']} could not be reduced to 2D. Shape: {im.shape}") # PL finished adding here
+      
 
 
   # Remove edges and data behind the mask
   if 'Crop' in imdat: 
-      if imdat['Crop'] is not None: im = edge_remove(im,imdat)
-  if 'Radius' in imdat:
-      if imdat['Radius'] is not None: im = mask_remove(im,imdat)
+      if imdat['Crop'] is not None: im = crop(im,imdat)
+  if 'Mask' in imdat:
+      if imdat['Mask'] is not None: im = mask_remove(im,imdat)
 
   if imdat['Mode Subtract']:
     mode = scipy.stats.mode(im,axis=None,nan_policy='omit')[0]
@@ -321,7 +283,7 @@ def check_keys(imdt, im):
     # Now check for the 'optional' keys
     # Not an elegant way to do this. Will figure out something better later. 7/8/24
     optkeys = {
-        'Masks': 'Radius',
+        'Masks': 'Mask',
         'Normalization': 'N-Range',
         'Clipping': 'σ',
         'Smoothing': 'Stdev',
@@ -393,7 +355,7 @@ def process(imdat, name='dict', custom_ims=None):
               scale parameters for asinhlin scaling
       OPTIONAL PARAMETERS:
           'Crop' (int): radius (in pixels) to be cropped from the edge of the image
-          'Radius' (int): radius (in pixel) from the center within which
+          'Mask' (int): radius (in pixel) from the center within which
               pixels are to be removed
           'Nan To Num' (bool): convert nans to 0?
           
