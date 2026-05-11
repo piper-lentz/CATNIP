@@ -1,0 +1,511 @@
+import bettermoments as bm
+from astropy.io import fits
+import numpy as np
+import skimage
+import skimage.transform
+import cv2
+import matplotlib.pyplot as plt
+import math
+import seaborn as sb
+import os
+import pandas as pd
+import astropy.units as u
+import photutils.aperture as phot
+from matplotlib.patches import Circle, Ellipse
+from copy import copy, deepcopy
+import matplotlib as mpl
+from matplotlib.ticker import MultipleLocator
+import DiskImageProcessor # PL
+
+
+class AstroImage():
+    '''
+    Class to represent a disk image. Contains required parameters to process,
+    deproject, construct profiles, and eventually produce plots for the image.
+    
+    
+    Attributes
+    ----------
+    obj : str
+        Disk name.
+    imagery_type : str
+        Image tracer (scattered light, mm continuum, line emission).
+    imagery_source : str
+        Instrument with which the image was taken.
+    path : str
+        Path of fits file for the image.
+    trim : float or None
+        Amount by which to trim line emission data. Irrelevant for now (v1.0).
+    r2: bool
+        Whether to r2-scale the images. Recommended for scattered light imagery.
+    stokes_component: bool
+        Stokes component of the fits file to use for polarimetric data.
+    override_center: list or None
+        Center coordinates to manually set for an image if the center information
+        from the header is incorrect. Usually needed for ALMA data.
+    plot_heatmap : bool
+        Whether to plot a polar projection of the imagery in the multiline plot.
+    interval : list
+        Colorbar bounds.
+    asinh_a : float
+        Parameter for asinh scaling. Ranges from 0 to 1.
+    n_start : int or None
+        Radius slice during profile creation at which to begin edge-checking.
+        (The width of a radius slice is px_bin, which is the resolution divided
+         by the pixel scale. This value represents the minimum resolvable distance
+         in pixels.)
+    n_deltas : int
+        Number of previous radial slices to check for edge-finding at each slice.
+        The delta in maximum median intensity among the PAs is evaluated for each
+        of these slices. The radial profile generation loop will break if all
+        [n_deltas] maxima are less than delta_lim.
+    delta_lim : float
+        Intensity delta threshold for edge-finding.
+    show_deltas : bool
+        Whether to print deltas for each iteration of the radial profile generation
+        loop in the log.
+    cmap : str
+        Name of cmap to use for image and polar map plotting for this AstroImage
+        in the multipanel plot.
+    color : str
+        Name of color to use for profile lineplots for this AstroImage in the
+        multipanel plot.
+    fits_table : fits.hdu.hdulist.HDUList
+        Fits file data, opened from the fits file path.
+    header : fits.header.Header
+        Fits file header information.
+    PA : int
+        Position angle of the disk.
+    incl : int
+        Inclination of the disk.
+    PAs : list
+        List of PAs to loop through during radial and azimuthal profile generation.
+    radlist : list
+        Radii for which to generate and plot azimuthal profiles in the multiline plot.
+    
+    
+    Methods
+    -------
+    strip_header():
+        Extracts relevant information about the disk image from the fits file
+        header.
+    deproject(r2=False):
+        Deprojects the image data using PA and incl.
+    pa_rotate():
+        Rotates image by each PA in PAs and returns a list of all rotated images
+        for radial and azimuthal profile generation.
+    make_profiles():
+        Constructs radial and azimuthal profiles for the image.
+    plot_prep():
+        Maps radial and azimuthal profile data into a format suitable for 
+        plotting in AstroObject.make_plot_multiline() by melting the dataframes
+        produced in make_profiles().
+    profiles():
+        Wrapper function that calls all the above functions (except for
+        strip_header()) in order. Called by AstroObject.__init__().
+    
+    History
+    -------
+    Original author: Kate Follette in IDL.
+    Revised by Cat Sarosi (2022).
+    Revised further by Bibi Hanselman (2024). Added descriptive log messages,
+    cleaned up unnecessary code, further wrangled the data in light of changes
+    to AstroObject.make_plot_multiline, and removed individual image plotting
+    functionality as it's now effectively covered among the possible multiline
+    plot display options.
+    '''
+    def __init__(self,image_dict=None):
+        '''
+        Initializes required image attributes for deprojection and profile
+        creation.
+
+        Parameters
+        ----------
+        image_dict : dict, optional
+            Dict pulled from sheets interface that contains values for
+            each of the image attributes. The default is None.
+
+        '''
+        if image_dict:
+            # Essential image information
+            self.obj = image_dict['Object']
+            self.imagery_type = image_dict['Tracer']
+            self.imagery_source = image_dict['Source']
+            self.path = image_dict['Path']
+            
+            # Tracer-specific information
+            self.trim = np.nan if image_dict['Trim'] == None else image_dict['Trim']
+            self.r2 = image_dict['r2']
+            self.stokes_component = image_dict['Stokes Component']
+            
+            # Custom center coordinates
+            self.override_center = [int(i) for i in image_dict['Override Center']] if image_dict['Override Center'] is not None else None
+            
+            # Option to plot heatmap (polar map)
+            self.plot_heatmap = image_dict['Plot Heatmap']
+            
+            # Scaling considerations
+            self.interval = image_dict["CB-Range"] #image_dict['perc_interval']
+            self.asinh_a = image_dict['Scale Parameter'] #image_dict['asinh_a']
+            
+            # For edge-finding portion of make_profiles() function.
+            # Might refine this code in the future. 7/30/24
+            self.n_start = image_dict['N Start'] if image_dict['N Start'] is not None else image_dict['N Deltas']
+            self.n_deltas = image_dict['N Deltas']
+            self.delta_lim = image_dict['Delta Lim']
+            self.show_deltas = image_dict['Show Deltas']
+            
+            # Color settings
+            self.cmap = image_dict['CMap']
+            self.color = image_dict['Color']
+            
+            # Fits file information
+            self.fits_table = fits.open(image_dict['Path'])
+            self.header = self.fits_table[0].header
+
+            # Open file and get required information from the header.
+            # Called first to get value for im.data, which is passed to figg.process.
+            self.strip_header()
+
+##############################################################################
+
+    def __copy__(self):
+        '''
+        Copies this AstroImage while reassigning the data and ycen attributes
+        to their values before deprojection. Used to plot on sky (projected)
+        imagery.
+
+        Returns
+        -------
+        or_im : AstroImage
+            Identical image object, but containing projected data.
+
+        '''
+        or_im = AstroImage()
+        or_im.__dict__.update(self.__dict__)
+        or_im.data = self.or_im
+        or_im.ycen = self.or_ycen
+        or_im.bounds = deepcopy(self.bounds)
+        or_im.bounds['y'] = [or_im.ycen - self.auto_bound, or_im.ycen - self.auto_bound/2, or_im.ycen + self.auto_bound/2, or_im.ycen + self.auto_bound]
+        return or_im
+
+##############################################################################
+    def strip_header(self):
+        '''
+        Extracts relevant information about the disk image from the fits file header.
+        '''
+        header = self.fits_table[0].header
+
+        # If the source was ALMA...
+        if self.imagery_source == 'ALMA':
+            self.date = header['DATE-OBS'].split('T')[0]
+            self.target = header['OBJECT']
+            self.pixscale = None
+            
+            # PL adding here because some ALMA headers use CDELT instead of history to say pixscale
+            # PL commented this out because another statement already written the way I did it
+            # get pixscale through CDELT2
+            # pixscale_deg = header['CDELT2'] * u.deg  # cdelt2 (it's positive) and put in deg
+            # pixscale_arcsec = pixscale_deg.to(u.arcsec)  # convert to degrees
+            # pixscale_round = (round(pixscale_arcsec.value, 6)*u.arcsec).to(u.si.mas).value # round to get like value in History 
+            # self.pixscale = pixscale_round
+
+            # PL commented this out. this code gets pixscale from history, which does not always exist
+            # for row in header['HISTORY']:
+            #     if 'cell' in row:
+            #         #https://casaguides.nrao.edu/index.php?title=Image_Continuum#Image_Parameters
+            #         # self.pixscale = (float(row.split("cell")[1].split("=")[1].split("arcsec")[0].replace("'","").replace("[","").replace("]","")) * u.arcsec).to(u.si.mas).value
+            #         cell_str = row.split("cell")[1].split("=")[1].split("arcsec")[0]
+            #         cell_str = cell_str.replace('"', '').replace("'", "").replace("[", "").replace("]", "").strip()
+            #         self.pixscale = (float(cell_str) * u.arcsec).to(u.si.mas).value
+            #         break
+                
+            if self.pixscale is None:
+               self.pixscale = (abs(float(header['CDELT1'])) * u.deg).to(u.si.mas).value
+            self.xcen,self.ycen = (header['CRPIX1'],header['CRPIX2'])
+            self.resolution = (header['BMAJ'] + header['BMIN'])/2 * u.deg
+            self.px_bin = int(np.floor(self.resolution.to(u.arcsec)/((self.pixscale * u.si.mas).to(u.arcsec))).value)
+            self.units = header['BUNIT']
+
+            # Get the frequency band
+            self.band = ''
+            # https://www.eso.org/public/teles-instr/alma/receiver-bands/
+            bands = {'Band 1': [35, 50],
+                     'Band 2': [67, 84],
+                     'Band 3': [84, 116],
+                     'Band 4': [125, 163],
+                     'Band 5': [163, 211],
+                     'Band 6': [211, 275],
+                     'Band 7': [275, 373],
+                     'Band 8': [385, 500],
+                     'Band 9': [602, 720],
+                     'Band 10': [787, 950]}
+            for band in bands:
+                if bands[band][0] <= (self.header['RESTFRQ'] * 1e-9) <= bands[band][1]: self.band = band
+
+            if self.imagery_type == 'continuum':
+                #conversion to float 64 required for image rotation later
+                #https://github.com/quatrope/astroalign/issues/70
+                self.data = skimage.util.img_as_float64(self.fits_table[0].data[0,0,:,:]) #original
+            
+            # Deal with line data later...
+            if self.imagery_type == 'line':
+                cube_data = self.fits_table[0].data
+                if not math.isnan(self.trim):
+                    trim = self.trim
+                    data_trimmed = cube_data[0,trim[0][0]:trim[0][1],trim[1][0]:trim[1][1],trim[1][0]:trim[1][1]]
+                    trimmed_path = self.path.split('.fits')[0] + '_trimmed.fits'
+                    #fits.writeto(trimmed_path, data_trimmed, header = file[0].header, overwrite = True)
+                    newpath = trimmed_path
+                else:
+                    newpath = self.path
+                if not os.path.exists(newpath.split('.fits')[0] + '_M8.fits'): pass
+                    #moments = bm.collapse_zeroth(velax=velax, data=masked_data, rms=rms)
+                new_file = fits.open(newpath.split('.fits')[0] + '_M8.fits')
+                #conversion to float 64 required for image rotation later
+                #https://github.com/quatrope/astroalign/issues/70
+                self.data = skimage.util.img_as_float64(new_file[0].data[::]).byteswap().newbyteorder()
+
+        # If the source was SPHERE...
+        if self.imagery_source == 'SPHERE':
+            self.date = header['DATE']
+            self.target = header["TARGET"]
+            self.pixscale = header['SCALE']
+            #self.xcen,self.ycen = (header['STAR_X'],header['STAR_Y']) 
+            self.xcen,self.ycen = (header['CRPIX1'],header['CRPIX2']) # SPHERE, GPI, HiCIAO all use CRPIX
+            #Assuming North up, east left until told otherwise)
+            #self.rot = 0
+
+
+            self.band = header['FILTER']
+
+            stokes_index = header['STOKES'].split(',').index(self.stokes_component)
+            #conversion to float 64 required for image rotation later
+            #https://github.com/quatrope/astroalign/issues/70
+            self.data = skimage.util.img_as_float64(self.fits_table[0].data[stokes_index])
+
+            #https://courses.lumenlearning.com/suny-physics/chapter/27-6-limits-of-resolution-the-rayleigh-criterion/
+            rayleigh_crit = 1.22 * (header['WAVELE'] * u.si.micron).to(u.meter)/(8.2 * u.meter) * u.si.rad
+            self.resolution = rayleigh_crit
+            self.px_bin = int(np.floor(rayleigh_crit.to(u.si.mas)/(self.pixscale * u.si.mas)))
+            self.units = header['FLUXUNIT']
+
+        if self.override_center is not None:
+            self.xcen,self.ycen = self.override_center[0], self.override_center[1]
+            print('Overrode center')
+##############################################################################
+    def deproject(self):
+        '''
+        Deprojects the image data using disk PA and incl.
+        
+        Parameters
+        ----------
+        r2 : bool, optional
+            Whether to r2-scale the data. The default is False.
+        
+        '''
+
+        # PL added - error statment, if data shape is 0 report that the image is empty
+        if self.data is None or self.data.size == 0:
+            raise ValueError(f"Image is empty - cannot deproject. Check the Crop column in Image Data in your Google Sheet, you are likely cropping off the whole image. Data shape of image: {self.data.shape}.")
+        # PL done
+        
+        ndimx,ndimy = self.data.shape[1],self.data.shape[0]
+
+        M = cv2.getRotationMatrix2D((self.xcen,self.ycen), self.PA - 90, 1.0)
+
+        imrot = cv2.warpAffine(self.data, M,
+                               (self.data.shape[0], self.data.shape[1]),
+                               flags = cv2.INTER_CUBIC)
+
+        #stretch image in y by cos(incl) to deproject and divide by that factor to preserve flux
+        im_rebin = cv2.resize(imrot,
+                              (ndimx,int(np.round(ndimy*(1/math.cos(math.radians(self.incl)))))),
+                              interpolation = cv2.INTER_CUBIC)
+        im_rebin = im_rebin/(1./math.cos(math.radians(self.incl)))
+
+        ndimy2 = im_rebin.shape[0]
+        if self.override_center is not None:
+            ycen2 = int(round((ndimy2/ndimy)*self.ycen))
+        else:
+            ycen2 = ndimy2/2
+
+        if self.r2:
+          print('Applying r2 correction...')
+          r = np.zeros((ndimy2,ndimx))
+          for x in np.arange(0, ndimx-1):
+            for y in np.arange(0, ndimy2-1):
+                r[y,x]=np.sqrt((x-self.xcen)**2+(y-ycen2)**2)
+                im_rebin[y,x]=im_rebin[y,x]*(r[y,x])**2
+          print('Applied r2 correction')
+
+        #rotate back to original orientation
+        M = cv2.getRotationMatrix2D((self.xcen, ycen2), -1*(self.PA - 90), 1.0)
+
+        im_rebin_rot = cv2.warpAffine(im_rebin, M,
+                                      (ndimx, ndimy2),
+                                      flags = cv2.INTER_CUBIC)
+
+        self.data = im_rebin_rot
+        self.ycen = ycen2
+##############################################################################
+    def pa_rotate(self):
+        '''
+        Rotates image by each PA in PAs and returns a list of all rotated images
+        (file_rot) for radial and azimuthal profile generation.
+        '''
+        print('Rotating over PAs...')
+        shape = (self.data.shape[0],self.data.shape[1])
+        nPAs = len(self.PAs)
+        file_rot = np.zeros((nPAs,shape[0],shape[1]))
+
+        for i in np.arange(0, nPAs):
+            pa = -self.PAs[i] + 90
+            if pa == 0:
+                file_rot[i] = self.data
+            else:
+                M = cv2.getRotationMatrix2D((self.xcen, self.ycen), pa, 1.0)
+                file_rot[i] = cv2.warpAffine(self.data,
+                                             M,
+                                             (shape[1], shape[0]),
+                                             flags =    cv2.INTER_CUBIC)
+        self.file_rot = file_rot
+##############################################################################
+    def make_profiles(self):
+        '''
+        Constructs radial and azimuthal profiles for the image.
+        '''
+        radial_profiles = pd.DataFrame(columns=[str(PA) for PA in self.PAs])
+        azimuthal_profiles = pd.DataFrame(columns=[str(PA) for PA in self.PAs])
+        shape = self.file_rot.shape[1:]
+        halfx = int(shape[1]/2)
+        halfy = int(shape[0]/2)
+        half_px_bin = int(self.px_bin//2)
+
+        PA_mask = np.ones(shape, dtype=bool)
+        PA_mask[halfy:shape[0],halfx-half_px_bin:halfx+half_px_bin+1] = False
+
+        print('Generating radial profiles...')
+        # Radial profile loop
+        for radcut in np.arange(0,(shape[0]/2/self.n_deltas)):
+            r_in,r_out = (radcut * self.px_bin, (radcut+1) * self.px_bin)
+            ap = (phot.CircularAnnulus([self.xcen,self.ycen], r_in, r_out)) if radcut > 0 else(phot.CircularAperture([self.xcen,self.ycen],r_out))
+
+            for panum,pa in np.ndenumerate(self.PAs):
+                radial_profiles.loc[radcut, str(pa)] = phot.ApertureStats(self.file_rot[panum],
+                                                                          ap, sum_method = 'center',
+                                                                          mask = PA_mask).median #mask = PA_mask + np.where(self.file_rot[panum]<0, True,False)).mean
+
+                #probably WRONG??!?!?! Should be looping over more angles at higher radii
+                #plot masked image
+            deltas = []
+            delta_lim = self.delta_lim
+            if len(radial_profiles) > self.n_start:
+                if self.r2:
+                    delta_lim = self.delta_lim * (radcut+1 * self.px_bin)**2
+                for i in np.arange(0,self.n_deltas):
+                    deltas.append(np.max(abs(radial_profiles.loc[radcut-(i+1),:] - radial_profiles.loc[radcut-i,:])))
+                clip_condition = all(delta < delta_lim for delta in deltas)
+                if self.show_deltas:
+                    print(radial_profiles.loc[radcut,:])
+                    print(deltas)
+                    print(delta_lim)
+                if self.r2:
+                    clip_condition = bool(clip_condition + (np.where(radial_profiles.loc[radcut-self.n_deltas:radcut+1,:] < 0, True,False).all()))
+                if clip_condition:
+                    break
+
+        print('Generating azimuthal profiles...')
+        # Az profile loop
+        for panum,pa in np.ndenumerate(self.PAs):
+            for rad in self.radlist:
+                rad = int(rad)
+                r_in,r_out = (int(rad/self.pixscale - half_px_bin),int(rad/self.pixscale + half_px_bin + 1))
+                ap = phot.CircularAnnulus([self.xcen,self.ycen],r_in,r_out) if r_in > 0 else phot.CircularAperture([self.xcen,self.ycen],r_out)
+                azimuthal_profiles.loc[str(rad), str(pa)] = phot.ApertureStats(self.file_rot[panum],
+                                                                    ap, sum_method = 'center',
+                                                                    mask = PA_mask).median  #mask = PA_mask + np.where(self.file_rot[panum]<0, True,False)).sum
+
+        self.radial_profiles = radial_profiles
+        self.azimuthal_profiles = azimuthal_profiles
+        self.n_cuts = radcut + 1
+##############################################################################
+    def plot_prep(self):
+        '''
+        Maps radial and azimuthal profile data into a format suitable for 
+        plotting in AstroObject.make_plot_multiline() by melting the dataframes
+        produced in make_profiles().
+        '''
+        self.auto_bound = self.n_cuts * self.px_bin
+        self.bounds = {}
+        self.bounds['x'] = [self.xcen - self.auto_bound, self.xcen - self.auto_bound/2, self.xcen + self.auto_bound/2, self.xcen + self.auto_bound]
+        self.bounds['y'] = [self.ycen - self.auto_bound, self.ycen - self.auto_bound/2, self.ycen + self.auto_bound/2, self.ycen + self.auto_bound]
+
+        #make x axis in arcsec
+        self.radial_profiles['xaxis'] = np.arange(0,self.n_cuts) * self.pixscale * self.px_bin + self.pixscale * self.px_bin/2
+        self.radial_profiles['mean'] = self.radial_profiles.loc[:, ~self.radial_profiles.columns.isin([str(self.PA), str(self.PA+90),'xaxis'])].mean(axis= 1,skipna=True)
+        rad_plot_data = pd.melt(self.radial_profiles, id_vars=['xaxis'], var_name='PA', value_name = 'flux')
+        rad_plot_data['flux'] = rad_plot_data['flux']/np.nanmax(rad_plot_data['flux'])
+        ### this will not normalize to 1 in radial profiles since the np.nanmax(rad_plot_data['flux'])
+        ### is the max flux of the whole disk, not just at one specific PA
+        
+        # Adjust the PAs so that they're oriented correctly (CCW)
+        PAs = rad_plot_data['PA'].drop(rad_plot_data[rad_plot_data['PA'] == 'mean'].index).astype(int)
+        PAs = 180 - PAs
+        PAs[PAs < 0] += 360
+        rad_plot_data['PA'].loc[rad_plot_data['PA'] != 'mean'] = PAs
+
+        self.azimuthal_profiles.loc[-1] = self.radial_profiles.loc[:, ~self.radial_profiles.columns.isin([str(self.PA), str(self.PA+90),'xaxis'])].median(axis= 0,skipna=True)
+        self.azimuthal_profiles.rename(index={-1:'median'},inplace=True)
+        self.azimuthal_profiles['Radius (mas)'] = self.azimuthal_profiles.index
+        az_plot_data = pd.melt(self.azimuthal_profiles, id_vars=['Radius (mas)'], var_name='PA', value_name = 'flux')
+        if np.nanmax(az_plot_data['flux']) == 0: # PL added value error message
+                raise ValueError("Your mask is likely too large. Flux is being divided by max value 0 to create azimuthal profile.")
+        az_plot_data['flux'] = az_plot_data['flux']/np.nanmax(az_plot_data['flux'])
+
+        # Adjust the PAs so that they're oriented correctly (CCW)
+        PAs = az_plot_data['PA'].astype(int)
+        PAs = 180 - PAs
+        PAs[PAs < 0] += 360
+        az_plot_data['PA'] = PAs
+
+        self.rad_plot_data = rad_plot_data
+        self.az_plot_data = az_plot_data
+
+##############################################################################
+
+    def profiles(self):
+        '''
+        Wrapper to call all the above functions in order.
+        '''
+        print(f'Current image: {self.obj} {self.imagery_type}')
+
+        self.shape = (self.data.shape[1],self.data.shape[0])
+        self.nPAs = len(self.PAs)
+
+        # Shitty way to save original data plus centers before deprojection
+        self.or_im, self.or_ycen = self.data, self.ycen
+        self.deproject()
+
+        # PL added to check edge finding parameters
+        # DEBUG edge detection parameters
+        # if not self.preview:
+        #     self.diagnose_edge_params(max_steps=100)
+
+        
+        if self.preview_crop is None: # PL added
+            raise ValueError('Provide a Preview Crop value in the google sheet') # PL added
+        elif self.preview: # PL wrote elif instead of if
+            #Immediately bound image according to preview crop - this is for cropped r2 corrected data
+            #Probably can rework plot_im code so I don't need this. 10/7/24
+            self.auto_bound = self.preview_crop
+            self.bounds = {}
+            self.bounds['x'] = [self.xcen - self.auto_bound, self.xcen - self.auto_bound/2, self.xcen + self.auto_bound/2, self.xcen + self.auto_bound]
+            self.bounds['y'] = [self.ycen - self.auto_bound, self.ycen - self.auto_bound/2, self.ycen + self.auto_bound/2, self.ycen + self.auto_bound]
+        else:
+            # Profile construction
+            self.pa_rotate()
+            self.make_profiles()
+            self.plot_prep()
+
+        print(f'{self.obj} {self.imagery_type} done!')
