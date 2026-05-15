@@ -1,3 +1,5 @@
+# DiskProfileExtractor
+
 from astropy.io import fits
 import numpy as np
 import skimage
@@ -14,7 +16,7 @@ from matplotlib.patches import Circle, Ellipse
 from copy import copy, deepcopy
 import matplotlib as mpl
 from matplotlib.ticker import MultipleLocator
-import DiskImageProcessor # PL
+import DiskImageProcessor 
 #import bettermoments as bm # commented out because never used and was being
 # difficult when first downloading code, not sure why it was here in the first place. 
 
@@ -114,6 +116,8 @@ class AstroImage():
     to AstroObject.make_plot_multiline, and removed individual image plotting
     functionality as it's now effectively covered among the possible multiline
     plot display options.
+    Revised even further by Piper Lentz (2026). Refactored code, added 
+    ValueError messages
     '''
     def __init__(self,image_dict=None):
         '''
@@ -202,24 +206,6 @@ class AstroImage():
             self.date = header['DATE-OBS'].split('T')[0]
             self.target = header['OBJECT']
             self.pixscale = None
-            
-            # PL adding here because some ALMA headers use CDELT instead of history to say pixscale
-            # PL commented this out because another statement already written the way I did it
-            # get pixscale through CDELT2
-            # pixscale_deg = header['CDELT2'] * u.deg  # cdelt2 (it's positive) and put in deg
-            # pixscale_arcsec = pixscale_deg.to(u.arcsec)  # convert to degrees
-            # pixscale_round = (round(pixscale_arcsec.value, 6)*u.arcsec).to(u.si.mas).value # round to get like value in History 
-            # self.pixscale = pixscale_round
-
-            # PL commented this out. this code gets pixscale from history, which does not always exist
-            # for row in header['HISTORY']:
-            #     if 'cell' in row:
-            #         #https://casaguides.nrao.edu/index.php?title=Image_Continuum#Image_Parameters
-            #         # self.pixscale = (float(row.split("cell")[1].split("=")[1].split("arcsec")[0].replace("'","").replace("[","").replace("]","")) * u.arcsec).to(u.si.mas).value
-            #         cell_str = row.split("cell")[1].split("=")[1].split("arcsec")[0]
-            #         cell_str = cell_str.replace('"', '').replace("'", "").replace("[", "").replace("]", "").strip()
-            #         self.pixscale = (float(cell_str) * u.arcsec).to(u.si.mas).value
-            #         break
                 
             if self.pixscale is None:
                self.pixscale = (abs(float(header['CDELT1'])) * u.deg).to(u.si.mas).value
@@ -487,11 +473,6 @@ class AstroImage():
         # Shitty way to save original data plus centers before deprojection
         self.or_im, self.or_ycen = self.data, self.ycen
         self.deproject()
-
-        # PL added to check edge finding parameters
-        # DEBUG edge detection parameters
-        # if not self.preview:
-        #     self.diagnose_edge_params(max_steps=100)
 
         
         if self.preview_crop is None: # PL added
