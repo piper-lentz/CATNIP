@@ -1,14 +1,14 @@
 """
 DiskImageProcessor
-
-FIGG PROCESSING:
-normalizes, background subtracts, and scales disk images
-according to user-defined parameters.
+This module normalizes, background subtracts, and scales disk images
+according to user-defined parameters in the accompanying Google Sheet.
 ---
-Original code written by Alex DelFranco
-Adapted by Bibi Hanselman
-Original dated 7 July 2024
-Updated 28 July 2024
+Original code written by Alex DelFranco, 7 July 2024
+Adapted by Bibi Hanselman, 28 July 2024
+Updated by Piper Lentz, 15 May 2026
+    Squeezed out singleton ALMA image dimensions,
+    Corrected the crop function to actually remove edges
+    Updated names of functions to be more descriptive
 """
 import numpy as np
 from tqdm import tqdm
