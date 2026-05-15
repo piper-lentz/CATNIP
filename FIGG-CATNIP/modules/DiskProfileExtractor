@@ -1,4 +1,22 @@
-# DiskProfileExtractor
+'''
+DiskProfileExtractor
+This module measures and generates radial and azimuthal
+profiles for each disk image.
+
+History
+-------
+Original author: Kate Follette in IDL.
+Revised by Cat Sarosi (2022).
+Revised further by Bibi Hanselman (2024). Added descriptive log messages,
+cleaned up unnecessary code, further wrangled the data in light of changes
+to AstroObject.make_plot_multiline, and removed individual image plotting
+functionality as it's now effectively covered among the possible multiline
+plot display options.
+Revised even further by Piper Lentz (2026). Refactored code, added 
+ValueError messages
+'''
+
+
 
 from astropy.io import fits
 import numpy as np
@@ -106,18 +124,7 @@ class AstroImage():
     profiles():
         Wrapper function that calls all the above functions (except for
         strip_header()) in order. Called by AstroObject.__init__().
-    
-    History
-    -------
-    Original author: Kate Follette in IDL.
-    Revised by Cat Sarosi (2022).
-    Revised further by Bibi Hanselman (2024). Added descriptive log messages,
-    cleaned up unnecessary code, further wrangled the data in light of changes
-    to AstroObject.make_plot_multiline, and removed individual image plotting
-    functionality as it's now effectively covered among the possible multiline
-    plot display options.
-    Revised even further by Piper Lentz (2026). Refactored code, added 
-    ValueError messages
+
     '''
     def __init__(self,image_dict=None):
         '''
