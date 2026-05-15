@@ -1,16 +1,36 @@
 '''
 DiskAnalysisPipeline
-AstroObject class from original CATNIP python file
+This module uses DiskImageProcessor module to process your disk images, uses 
+DiskProfileExtractor to generate profiles, then creates the final 
+multipanel figure.
 
 
 
-CATNIP: Comparative Analysis Tool for Normalized Imagery and Profiles. (Working name)
-Processes multiwavelength disk images using FIGG, and computes radial
+CATNIP: Comparative Analysis Tool for Normalized Imagery and Profiles.
+Processes multiwavelength disk images using DiskImageProcessor, and computes radial
 and azimuthal profiles according to user input.
 Original written by Cat Sarosi, 2022
 Modified by Bibi Hanselman
+Further modified by Piper Lentz, 2026
 Created 30 July 2024
 Updated 30 July 2024
+
+
+History
+-------
+Original author: Kate Follette in IDL.
+Revised by Cat Sarosi (2022).
+Revised further by Bibi Hanselman (2024). New display-related attributes and
+an overhaul of the axis-plotting routine to extend flexibility/ 
+user control and improve the aesthetic quality of the final graphic. New
+plotting options (ex. projected imagery) to enhance the utility of the tool,
+with support for custom inputs for each disk in the user interface to cover
+many possible disk image inputs. Also incorporated processing code from
+the DiskImageProcessor module during initialization to process the images according to
+user-defined parameters.
+Revised even further by Piper Lentz (2026). Refactored code, added 
+ValueError messages, debugging (ex: you can plot one rad profile 
+instead of needing to plot 2)
 '''
 from DiskProfileExtractor import AstroImage
 import bettermoments as bm
@@ -111,19 +131,6 @@ class AstroObject():
         Generates a multipanel plot displaying disk imagery and/or intensity
         profiles for the disk. Types of panels, their order, and the choice of
         column layout are all user-controlled.
-    
-    History
-    -------
-    Original author: Kate Follette in IDL.
-    Revised by Cat Sarosi (2022).
-    Revised further by Bibi Hanselman (2024). New display-related attributes and
-    an overhaul of the axis-plotting routine to extend flexibility/ 
-    user control and improve the aesthetic quality of the final graphic. New
-    plotting options (ex. projected imagery) to enhance the utility of the tool,
-    with support for custom inputs for each disk in the user interface to cover
-    many possible disk image inputs. Also incorporated processing code from
-    the figg module during initialization to process the images according to
-    user-defined parameters.
     '''
     def __init__(self, name, image_dict, display_dict):
         '''
