@@ -1,19 +1,25 @@
 """
-Google Sheet → FIGG-compatible dictionary converter (FIXED VERSION)
+sheetreader
+This module reads the parameters in the accompanying Google Sheet
+and stores them in a Python dictionary that can be read by the other 
+CATNIP modules. 
 
 Key fixes:
 - Safe type handling (no float/string TypeErrors)
 - Proper fallback: Disk Information > Disk Settings > None
 - Supports settings-only parameters (e.g. Preview Color)
+- Paramters in the setting sheets are implemented even if there are 
+    not found in the specs sheets (Piper Lentz, 2026)
+        (ex, Preview color is only in settings sheet)
 """
 
 import pandas as pd
 import glob
 import re
 
-######################
+##################################################################
 # SHEET LOADING
-######################
+##################################################################
 
 def get_sheet_data(wb, name):
     sheet = wb.worksheet(name)
@@ -26,7 +32,7 @@ def get_sheet_data(wb, name):
     return df
 
 
-######################
+##################################################################
 
 def sheet_extract(wb, sheet, trim=False):
     dataframe = get_sheet_data(wb, sheet)
@@ -44,9 +50,9 @@ def sheet_extract(wb, sheet, trim=False):
     return data
 
 
-######################
+##################################################################
 # SETTINGS PARSING
-######################
+##################################################################
 
 def global_setup(wb, settings_sheet):
     settings_dict = sheet_extract(wb, settings_sheet)
@@ -76,9 +82,9 @@ def global_setup(wb, settings_sheet):
     return defaults, specs
 
 
-######################
+##################################################################
 # PATH HANDLING
-######################
+##################################################################
 
 def addpaths(wb, im_data, namekey, settings_sheet):
 
@@ -117,9 +123,9 @@ def addpaths(wb, im_data, namekey, settings_sheet):
     return im_data
 
 
-######################
+##################################################################
 # SUBDIR HELPER
-######################
+##################################################################
 
 def get_subdir(mockup, index, settings_sheet):
     subdir = ''
@@ -131,9 +137,9 @@ def get_subdir(mockup, index, settings_sheet):
     return subdir
 
 
-######################
+##################################################################
 # SAFE TYPE CLEANER
-######################
+##################################################################
 
 def clean_value(value):
 
@@ -176,9 +182,9 @@ def clean_value(value):
     return value
 
 
-######################
+##################################################################
 # MAIN FUNCTION
-######################
+##################################################################
 
 def wb_to_dict(wb, sheet, add_paths=False, settings_sheet=None,
                namekey='Object', splitkey=None):
@@ -199,16 +205,13 @@ def wb_to_dict(wb, sheet, add_paths=False, settings_sheet=None,
         for key in splitkeys:
             images[key] = {}
 
-    # ----------------------------------------------------
-    # FULL KEY SPACE (FIX: includes Disk Settings fields)
-    # ----------------------------------------------------
+    # FULL KEY SPACE
     all_keys = set(mockup.keys()) | set(defaults.keys())
     for subdict in specs.values():
         all_keys.update(subdict.keys())
 
-    # ----------------------------------------------------
+
     # BUILD IMAGE DICTS
-    # ----------------------------------------------------
     for index, objname in enumerate(mockup[namekey]):
 
         image = {}
@@ -253,7 +256,8 @@ def wb_to_dict(wb, sheet, add_paths=False, settings_sheet=None,
 
 
 
-# """
+# Original sheetreader code 
+#"""
 # Converts any google sheet workbook into a dictionary compatible with figg.process().
 # ---
 # Original code written by Alex DelFranco
