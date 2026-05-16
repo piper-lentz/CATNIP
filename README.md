@@ -8,7 +8,7 @@ Part 1 - setting up your Google sheet
 
 Download the Google Sheet template here:
 
-https://docs.google.com/spreadsheets/d/1ZXnlReVCGW3vZHHM23J9_VRH-fQ7u1lA7Zm_0FPPa9k/copy
+https://docs.google.com/spreadsheets/d/184hYnDk9GfWwiSwoP5TETOcQlaXzvlWzp36VwU9htdo/copy
 
 This sheet comes preloaded with information for NIR and ALMA images for the disks EM* AS 209 and HD135344B. The files for these disk images are uploaded in the folder as a part of this tutotrial.
 
