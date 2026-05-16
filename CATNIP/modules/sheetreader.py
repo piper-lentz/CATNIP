@@ -1,5 +1,5 @@
 """
-sheetreader
+heetreader
 This module reads the parameters in the accompanying Google Sheet
 and stores them in a Python dictionary that can be read by the other 
 CATNIP modules. 
