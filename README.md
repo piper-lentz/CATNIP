@@ -1,7 +1,7 @@
 # CATNIP
 Welcome to CATNIP, a tool that facilitates the comparison of circumstellar disk images in multiple wavelengths. CATNIP, which stands for Comparative Analysis Tool for Normalized Imagery and Profiles, quantitatively analyzes disk substructures by generating radial and azimuthal profiles. With CATNIP, you can uncover trends in substructure between radio and infrared images, and begin to understand what it says about the underlying physical processes. 
 
-
+The Read the Docs page is found here: https://docs.google.com/document/d/1IH0xHETzkaGQZPpM99BjepuySH7GCEA139L7IBVB4Yw/copy
 Here are instructions to set up the tool on your computer:
 
 Part 1 - setting up your Google sheet
